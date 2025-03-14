@@ -4,6 +4,8 @@ from sympy import symbols, simplify, together, fraction, diff, Abs, factor_list,
 from sympy import init_printing
 import sympy
 import concurrent.futures
+import os
+import argparse
 
 init_printing()  # for pretty printing if using an interactive environment
 
@@ -11,8 +13,19 @@ init_printing()  # for pretty printing if using an interactive environment
 # PARAMETERS AND SYMBOLS
 ###############################################################################
 
-# Set n and define parameters. (Here n=3, but you can change it.)
-n = 2
+
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='Compute residues with parallel processing.')
+parser.add_argument('-n', type=int, default=9, help='Parameter n (default: 2)')
+parser.add_argument('-w', '--max_workers', type=int, default=os.cpu_count(), 
+                    help='Maximum number of worker processes (default: number of CPUs)')
+args = parser.parse_args()
+
+n = args.n
+max_workers = args.max_workers
+
+
+print(f"Running with n={n} and max_workers={max_workers}")
 
 # Declare symbols x1 and x2 with the assumptions 0 < x_i < 1.
 x1, x2 = symbols('x1 x2', real=True, positive=True)
@@ -204,7 +217,7 @@ for i, v in enumerate(integration_order):
     if inside_poles:
         # If f_current is a sum (an Add), compute the residue term-by-term.
         if f_current.is_Add:
-            with concurrent.futures.ProcessPoolExecutor() as executor:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 for cp in inside_poles:
                     term_futures = []
                     for term in f_current.args:
@@ -216,7 +229,7 @@ for i, v in enumerate(integration_order):
                     print("Residue for candidate pole", cp, "is:", res_sum_cp)
                     residues.append(res_sum_cp)
         else:
-            with concurrent.futures.ProcessPoolExecutor() as executor:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 future_to_pole = {executor.submit(my_residue, f_current, v, cp): cp for cp in inside_poles}
                 for future in concurrent.futures.as_completed(future_to_pole):
                     cp = future_to_pole[future]
