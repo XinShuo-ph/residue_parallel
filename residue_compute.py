@@ -26,7 +26,7 @@ n = args.n
 max_workers = args.max_workers
 batch_size = args.batch_size
 print(f"Running with n={n}, max_workers={max_workers}, and batch_size={batch_size}")
-## test this script by `python -u residue_compute.py -n 5 > log_N5.txt 2>&1` (-u makes sure no buffer when printing)
+## test this script by `python -u residue_compute.py -n6 > log_N6.txt 2>&1` (-u makes sure no buffer when printing)
 
 overall_start = time.time()
 
