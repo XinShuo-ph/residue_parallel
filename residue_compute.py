@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 import time
-from sympy import symbols, expand, simplify, together, fraction, diff, Abs, factor_list, solve, factor, multiplicity, limit, factorial
+from sympy import symbols, collect, expand, simplify, together, fraction, diff, Abs, factor_list, solve, factor, multiplicity, limit, factorial
+from sympy.printing.mathematica import mathematica_code
 import sympy
 import concurrent.futures
 import os
@@ -18,10 +19,14 @@ parser = argparse.ArgumentParser(description='Compute residues with parallel pro
 parser.add_argument('-n', type=int, default=9, help='Parameter n (default: 9)')
 parser.add_argument('-w', '--max_workers', type=int, default=os.cpu_count(),
                     help='Maximum number of worker processes (default: number of CPUs)')
+parser.add_argument('-b', '--batch_size', type=int, default=5,
+                    help='Batch size for parallel factorization (default: 5)')
 args = parser.parse_args()
 n = args.n
 max_workers = args.max_workers
-print(f"Running with n={n} and max_workers={max_workers}")
+batch_size = args.batch_size
+print(f"Running with n={n}, max_workers={max_workers}, and batch_size={batch_size}")
+## test this script by `python -u residue_compute.py -n 5 > log_N5.txt 2>&1` (-u makes sure no buffer when printing)
 
 overall_start = time.time()
 
@@ -100,8 +105,9 @@ def order_by_args(den, v, pole,original_factor):
             order += exp
     return order
 
-
-def my_residue(expr_in, v, pole, original_factor):
+## the legacy function that were not well optimized, 
+## kept here to illustrate the operations involved
+def my_residue_(expr_in, v, pole, original_factor):
     """
     Compute the residue of expr_in in variable v at pole.
     Uses simple inspection of factors for order=1 and the derivative formula when order > 1.
@@ -144,7 +150,7 @@ def process_term(term,tmpden,v):
     tmpnum = expand(tmpnum)
     return tmpnum/tmpden
 
-def my_residue_stepbystep(expr_in, v, pole, original_factor):
+def my_residue(expr_in, v, pole, original_factor):
     """
     Compute the residue of expr_in in variable v at pole.
     Uses simple inspection of factors for order=1 and the derivative formula when order > 1.
@@ -178,14 +184,72 @@ def my_residue_stepbystep(expr_in, v, pole, original_factor):
         ### the following few lines are the key to make the calculation possible
         ### the built-in residue() function of sympy would take forever to get higher order residues
         ti = time.time()
+
+                
+        # Handle large expressions in the first derivative
+        tmpnum1, tmpden1 = fraction(factor((v - pole)**m * expr))
+        print(f"First derivative split into fractions")
+
+        # Expand and collect the numerator before checking size
+        tmpnum1 = collect(expand(tmpnum1), v)
+        print(f"First derivative numerator expanded and collected")
         
-        # First derivative
-        deriv_unfactored = diff((v - pole)**m * expr, (v, 1))
-        print(f"First derivative completed")
-        t_diff_first = time.time()
+        # If numerator is a large sum, process it in parallel
+        if tmpnum1.is_Add and len(tmpnum1.args) > 5:
+            print(f"Large first derivative detected with {len(tmpnum1.args)} terms, using parallel processing")
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for term in tmpnum1.args:
+                    future = executor.submit(process_term, term, tmpden1, v)
+                    futures.append(future)
+                
+                results = [future.result() for future in concurrent.futures.as_completed(futures)]
+            t_diff_first = time.time()
+            # deriv = sum(results)
+
+            deriv_unfactored = sum(results)
+            print(f"First derivative parallel processing completed")
+            t_diff_first = time.time()
+            
+            # Combine terms using together
+            deriv = together(deriv_unfactored)
+            print(f"First derivative terms combined with together()")
+            
+            # Split into numerator and denominator again
+            tmpnum, tmpden = fraction(deriv)
+            
+            # Expand the numerator
+            deriv = expand(tmpnum) / tmpden
+            print(f"First derivative numerator expanded")
+            print(f"First derivative parallel processing completed")
+        else:
+            # For smaller expressions, use the original approach
+            
+            # First derivative
+            ## doing a factor() before diff() save a lot of time (~2 times speedup)
+            deriv_unfactored = diff(factor((v - pole)**m * expr), (v, 1))
+            print(f"First derivative completed")
+            t_diff_first = time.time()
+
+            ## doing factor() is still slow (~60 seconds) even if expr numerator is short
+            ## there might be a more clever way to do this 
+            ##   when there are a lot of terms in deriv_unfactored, this could be slow
+            ##   this might be a similar problem to the problem in getting final_results
+            deriv = factor(deriv_unfactored)
+            print(f"First derivative factored: {deriv}")
         
-        deriv = factor(deriv_unfactored)
-        print(f"First derivative factored: {deriv}")
+        
+        # # First derivative
+        # deriv_unfactored = diff((v - pole)**m * expr, (v, 1))
+        # print(f"First derivative completed")
+        # t_diff_first = time.time()
+        
+        # # from the log, the summing together the first derivative sometime takes a long time
+        # # we should check what deriv_unfactored looks like, when there are too much terms, maybe do together()/sum() and factor() in parallel
+
+        # deriv = factor(deriv_unfactored)
+        # print(f"First derivative factored: {deriv}")
         t_factor_first = time.time()
         
         loop_times = []
@@ -206,6 +270,7 @@ def my_residue_stepbystep(expr_in, v, pole, original_factor):
             
             # Process differentiation in parallel if tmpnum is large
             if tmpnum.is_Add and len(tmpnum.args) > 5:
+            # It seems like we never entered this branch for N=5
                 print(f"Iteration {ii+1}: Large expression detected with {len(tmpnum.args)} terms, using parallel processing")
                 loop_diff_start = time.time()
                
@@ -252,7 +317,7 @@ def my_residue_stepbystep(expr_in, v, pole, original_factor):
         print(f"Final result factored: {final_res}")
         tf = time.time()
         
-        print("High order pole at", v, "=", pole, "of order", m, " takes total", tf-ti, "seconds")
+        print("For term", expr, "\nHigh order pole at", v, "=", pole, "of order", m, " takes total", tf-ti, "seconds")
         print(f"  - diff1: {t_diff_first-ti:.3f}s, factor1: {t_factor_first-t_diff_first:.3f}s, loop: {t_loop-t_factor_first:.3f}s, limit: {t_limit-t_loop:.3f}s, factor2: {tf-t_limit:.3f}s")
         if loop_times:
             loop_str = ", ".join([f"iter{i}: {t:.3f}s (diff: {dt:.3f}s, factor: {ft:.3f}s)" for i, (t, dt, ft) in enumerate(zip(loop_times, loop_diff_times, loop_factor_times))])
@@ -279,7 +344,19 @@ for i, v in enumerate(integration_order):
     print("Number of terms in f_current:", num_terms)
     
     # 1. Write f_current as a single rational expression.
-    num_expr, den_expr = fraction(together(f_current))
+    # num_expr, den_expr = fraction(together(f_current))
+    
+    together_start = time.time()
+    f_together = together(f_current)
+    together_end = time.time()
+    
+    fraction_start = time.time()
+    num_expr, den_expr = fraction(f_together)
+    fraction_end = time.time()
+    
+    print(f"Time for together(): {together_end - together_start:.3f} seconds")
+    print(f"Time for fraction(): {fraction_end - fraction_start:.3f} seconds")
+    print(f"Total time for rational expression conversion: {fraction_end - together_start:.3f} seconds")
     
     # 2. Factor the denominator.
     coeff, factors_list = factor_list(den_expr)
@@ -370,7 +447,99 @@ for i, v in enumerate(integration_order):
     # 6. Replace f_current by residue_sum (a function of remaining variables).
     f_current = residue_sum
 
-final_result = factor(f_current)
+# # this step is extremely time consuming, costing ~5 hours for N=5
+# # there should be a way to parallelize this sum of large number of terms
+# final_result = factor(f_current)
+
+def process_batch(terms_batch):
+    """Process a batch of terms: combine, fraction, expand numerator, and factor."""
+    combined = together(sum(terms_batch))
+    num, den = fraction(combined)
+    expanded_num = expand(num)
+    result = factor(expanded_num / den)
+    return result
+
+print("Starting final factorization...")
+final_start = time.time()
+
+if f_current.is_Add and len(f_current.args) > batch_size:
+    print(f"Large expression detected with {len(f_current.args)} terms")
+    print(f"Using batch processing with batch_size={batch_size}")
+    
+    # Keep processing in batches until the expression is small enough
+    iteration = 1
+    while f_current.is_Add and len(f_current.args) > batch_size:
+        batch_start = time.time()
+        terms = list(f_current.args)
+        num_terms = len(terms)
+        num_batches = (num_terms + batch_size - 1) // batch_size  # Ceiling division
+        
+        print(f"Iteration {iteration}: Processing {num_terms} terms in {num_batches} batches")
+        
+        # Create batches
+        batches = []
+        for i in range(0, num_terms, batch_size):
+            batch = terms[i:i + batch_size]
+            batches.append(batch)
+        
+        # Process batches in parallel
+        batch_results = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for batch in batches:
+                futures.append(executor.submit(process_batch, batch))
+            
+            for future in concurrent.futures.as_completed(futures):
+                batch_results.append(future.result())
+        
+        # Update f_current with the processed results
+        f_current = sum(batch_results)
+        
+        batch_end = time.time()
+        print(f"Iteration {iteration} completed in {batch_end - batch_start:.3f} seconds")
+        print(f"Reduced to {len(f_current.args) if f_current.is_Add else 1} terms")
+        
+        iteration += 1
+    
+    # Final factorization of the reduced expression
+    print("Performing final factorization on the reduced expression")
+    final_result = factor(f_current)
+else:
+    print("Expression is small enough for direct factorization")
+    final_result = factor(f_current)
+
+final_end = time.time()
+print(f"Final factorization completed in {final_end - final_start:.3f} seconds total")
+
+
+# Save the result to a Mathematica-compatible file
+mathematica_filename = f"result_N{n}.m"
+print(f"Saving result to Mathematica file: {mathematica_filename}")
+
+mathematica_start = time.time()
+
+try:
+    # Time the conversion to Mathematica code
+    conversion_start = time.time()
+    mathematica_expr = f"result = {mathematica_code(final_result)};"
+    conversion_end = time.time()
+    
+    # Time the file writing
+    writing_start = time.time()
+    with open(mathematica_filename, 'w') as f:
+        f.write(mathematica_expr)
+    writing_end = time.time()
+    
+    print(f"Mathematica conversion time: {conversion_end - conversion_start:.3f} seconds")
+    print(f"File writing time: {writing_end - writing_start:.3f} seconds")
+    print(f"Result successfully saved to {mathematica_filename}")
+except Exception as e:
+    print(f"Error saving to Mathematica file: {e}")
+
+mathematica_end = time.time()
+print(f"Total Mathematica export time: {mathematica_end - mathematica_start:.3f} seconds")
+
+
 overall_end = time.time()
 print("======================================================")
 print("Final result after all integrations:")
