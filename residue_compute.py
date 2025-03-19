@@ -171,12 +171,37 @@ def my_residue(expr_in, v, pole, original_factor):
         print(f"Order is 0, returning zero")
         return sympy.S.Zero
     elif m == 1:
-        diff_den = diff(den, v).subs(v, pole).factor()
+        t_start = time.time()
+
+        t1 = time.time()
+        diff_den = diff(den, v)
+        t2 = time.time()
+        diff_den_at_pole = diff_den.subs(v, pole)
+        t3 = time.time()
+
+        diff_den_factored = factor(diff_den_at_pole)
+        t4 = time.time()
+
         num_at_pole = num.subs(v, pole)
-        result = factor(num_at_pole / diff_den)
+        t5 = time.time()
+        result = factor(num_at_pole / diff_den_factored)
+        t6 = time.time()
+
+        t_total = t6 - t_start
+
         print(f"Order is 1, numerator at pole: {num_at_pole}")
         print(f"Derivative of denominator at pole: {diff_den}")
         print(f"Residue result: {result}")
+        print(f"Derivative of denominator at pole: {diff_den_factored}")
+        print(f"Residue result: {result}")
+
+        if t_total > 2.0:
+            print(f"Timing breakdown for order=1 residue calculation (total: {t_total:.3f}s):")
+            print(f"  - Differentiate denominator: {t2-t1:.3f}s")
+            print(f"  - Substitute pole value: {t3-t2:.3f}s")
+            print(f"  - Factor derivative at pole: {t4-t3:.3f}s")
+            print(f"  - Evaluate numerator at pole: {t5-t4:.3f}s")
+            print(f"  - Factor final result: {t6-t5:.3f}s")
         return result
     else:
         print("High order pole at", v, "=", pole, "of order", m)
