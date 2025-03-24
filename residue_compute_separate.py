@@ -15,6 +15,10 @@ sympy.init_printing()  # for pretty printing if using an interactive environment
 # PARAMETERS AND SYMBOLS
 ###############################################################################
 
+
+threshold_deriv_terms = 3
+
+
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Compute residues with parallel processing.')
 parser.add_argument('-n', type=int, default=9, help='Parameter n (default: 9)')
@@ -27,7 +31,7 @@ n = args.n
 max_workers = args.max_workers
 batch_size = args.batch_size
 print(f"Running with n={n}, max_workers={max_workers}, and batch_size={batch_size}")
-## test this script by `python -u residue_compute.py -n6 > log_N6.txt 2>&1` (-u makes sure no buffer when printing)
+## test this script by `python -u residue_compute_separate.py -n6 > log_N6.txt 2>&1` (-u makes sure no buffer when printing)
 
 overall_start = time.time()
 
@@ -106,50 +110,11 @@ def order_by_args(den, v, pole,original_factor):
             order += exp
     return order
 
-## the legacy function that were not well optimized, 
-## kept here to illustrate the operations involved
-def my_residue_(expr_in, v, pole, original_factor):
-    """
-    Compute the residue of expr_in in variable v at pole.
-    Uses simple inspection of factors for order=1 and the derivative formula when order > 1.
-    """
-    expr = factor(expr_in)
-    num, den = fraction(expr)
-    m = order_by_args(den, v, pole, original_factor)
-    print("Computed order for the pole at ", pole, "is", m, " for denominator ", den)
-    if m == 0:
-        return sympy.S.Zero
-    elif m == 1:
-        return factor(num.subs(v, pole) / diff(den, v).subs(v, pole).factor())
-    else:
-        # print("High order pole at", v, "=", pole, "of order", m)
-        ### the following few lines are the key to make the calculation possible
-        ### the built-in residue() function of sympy would take forever to get higher order residues
-        ti = time.time()
-        deriv = diff((v - pole)**m * expr, (v, m-1))
-        t_diff = time.time()
-        deriv_factored = factor(deriv)
-        t_factor1 = time.time()
-        res = limit(deriv_factored, v, pole) / factorial(m-1)
-        t_limit = time.time()
-        final_res = factor(res)
-        tf = time.time()
-        print("for term", expr)
-        print("High order pole at", v, "=", pole, "of order", m, " takes total", tf-ti, "seconds")
-        print(f"  - diff: {t_diff-ti:.3f}s, factor1: {t_factor1-t_diff:.3f}s, limit: {t_limit-t_factor1:.3f}s, factor2: {tf-t_limit:.3f}s")
-        return final_res
-####  t1 = t_vars[0]
-####  t2 = t_vars[1]
-####  t3 = t_vars[2]
-####  testterm=t1**3*x1**2*x2**4/((-t1 + x1)**5*(-t1 + x2)*(-t1 + x2**2)*(-t1 + x1*x2**2)*(-t1 + x1**2*x2)*(x1 - 1)**5*(x1 + 1)*(x1 - x2)**2*(x2 - 1)**5*(x2 + 1)*(t1*x1 - 1)*(t1*x1 - x2)*(t1*x2 - 1)*(x1*x2 - 1)*(x1*x2**2 - 1)*(x1**2*x2 - 1))
-
 
 def process_term(term,tmpden,v):
     term_over_den = term / tmpden
-    tmp = factor(diff(term_over_den, (v, 1)))
-    tmpnum, tmpden = fraction(tmp)
-    tmpnum = expand(tmpnum)
-    return tmpnum/tmpden
+    tmp = diff(term_over_den, (v, 1)) # do not do factor here
+    return tmp
 
 def my_residue(expr_in, v, pole, original_factor):
     """
@@ -158,6 +123,8 @@ def my_residue(expr_in, v, pole, original_factor):
     a revised version, where the m-1 derivatives are taken step by step 
     and the expression factored after each derivatives
     thus we avoid large nested fractions
+    Also, in this implementation I avoid doing any together, 
+    will leave the sum to the final step
     """
     expr = factor(expr_in)
     num, den = fraction(expr)
@@ -185,7 +152,10 @@ def my_residue(expr_in, v, pole, original_factor):
 
         num_at_pole = num.subs(v, pole)
         t5 = time.time()
-        result = factor(num_at_pole / diff_den_factored)
+        if num_at_pole.is_Add and len(num_at_pole.args)>10:
+            result = num_at_pole / diff_den_factored
+        else:
+            result = factor(num_at_pole / diff_den_factored)
         t6 = time.time()
 
         t_total = t6 - t_start
@@ -211,6 +181,7 @@ def my_residue(expr_in, v, pole, original_factor):
         ### the built-in residue() function of sympy would take forever to get higher order residues
         ti = time.time()
 
+        # we may still assume the expression passed in is small enough so we can safely do factor in finite time
                 
         # Handle large expressions in the first derivative
         tmpnum1, tmpden1 = fraction(factor((v - pole)**m * expr))
@@ -221,7 +192,7 @@ def my_residue(expr_in, v, pole, original_factor):
         print(f"First derivative numerator expanded and collected")
         
         # If numerator is a large sum, process it in parallel
-        if tmpnum1.is_Add and len(tmpnum1.args) > 5:
+        if tmpnum1.is_Add and len(tmpnum1.args) > threshold_deriv_terms:
             print(f"Large first derivative detected with {len(tmpnum1.args)} terms, using parallel processing")
             
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -237,17 +208,19 @@ def my_residue(expr_in, v, pole, original_factor):
             deriv_unfactored = sum(results)
             print(f"First derivative parallel processing completed")
             t_diff_first = time.time()
+
+            if deriv_unfactored.is_Add:
+                # now instead of gether the sum, we factor only each individual terms
+                with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    futures = []
+                    for term in deriv_unfactored.args:
+                        future = executor.submit(factor, term)
+                        futures.append(future)
+                    
+                    myresults = [future.result() for future in concurrent.futures.as_completed(futures)]
             
-            # Combine terms using together
-            deriv = together(deriv_unfactored)
-            print(f"First derivative terms combined with together()")
-            
-            # Split into numerator and denominator again
-            tmpnum, tmpden = fraction(deriv)
-            
-            # Expand the numerator
-            deriv = expand(tmpnum) / tmpden
-            print(f"First derivative numerator expanded")
+            deriv = sum(myresults)
+
             print(f"First derivative parallel processing completed")
         else:
             # For smaller expressions, use the original approach
@@ -262,20 +235,24 @@ def my_residue(expr_in, v, pole, original_factor):
             ## there might be a more clever way to do this 
             ##   when there are a lot of terms in deriv_unfactored, this could be slow
             ##   this might be a similar problem to the problem in getting final_results
-            deriv = factor(deriv_unfactored)
+            # deriv = factor(deriv_unfactored)
+
+            if deriv_unfactored.is_Add:
+                # now instead of gether the sum, we factor only each individual terms
+                with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    futures = []
+                    for term in deriv_unfactored.args:
+                        future = executor.submit(factor, term)
+                        futures.append(future)
+                    
+                    myresults = [future.result() for future in concurrent.futures.as_completed(futures)]
+            
+            deriv = sum(myresults)
+
+
             print(f"First derivative factored: {deriv}")
         
-        
-        # # First derivative
-        # deriv_unfactored = diff((v - pole)**m * expr, (v, 1))
-        # print(f"First derivative completed")
-        # t_diff_first = time.time()
-        
-        # # from the log, the summing together the first derivative sometime takes a long time
-        # # we should check what deriv_unfactored looks like, when there are too much terms, maybe do together()/sum() and factor() in parallel
-
-        # deriv = factor(deriv_unfactored)
-        # print(f"First derivative factored: {deriv}")
+    
         t_factor_first = time.time()
         
         loop_times = []
@@ -287,23 +264,17 @@ def my_residue(expr_in, v, pole, original_factor):
             print(f"Processing derivative {ii+2} of {m-1}")
             loop_start = time.time()
             
-            tmpnum, tmpden = fraction(deriv)
-            print(f"Iteration {ii+1}: Expression split into fractions")
-            
-            tmpnum = collect(expand(tmpnum), v)
-            # tmpnum = expand(tmpnum)
-            print(f"Iteration {ii+1}: Numerator expanded and collected")
             
             # Process differentiation in parallel if tmpnum is large
-            if tmpnum.is_Add and len(tmpnum.args) > 5:
-            # It seems like we never entered this branch for N=5
-                print(f"Iteration {ii+1}: Large expression detected with {len(tmpnum.args)} terms, using parallel processing")
+            if deriv.is_Add and len(deriv.args) > threshold_deriv_terms:
+            # It seems like we never entered this branch for N<=5
+                print(f"Iteration {ii+1}: Large expression detected with {len(deriv.args)} terms, using parallel processing")
                 loop_diff_start = time.time()
                
                 with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                     futures = []
-                    for term in tmpnum.args:
-                        future = executor.submit(process_term, term, tmpden, v)
+                    for term in deriv.args:
+                        future = executor.submit(diff, term, (v,1))
                         futures.append(future)
                     
                     results = [future.result() for future in concurrent.futures.as_completed(futures)]
@@ -312,19 +283,38 @@ def my_residue(expr_in, v, pole, original_factor):
                 print(f"Iteration {ii+1}: Parallel differentiation completed")
                 loop_diff_end = time.time()
                 
-                deriv = together(deriv_unfactored)
-                print(f"Iteration {ii+1}: Combined terms by together")
+                    
+                if deriv_unfactored.is_Add:
+                    # now instead of gether the sum, we factor only each individual terms
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        futures = []
+                        for term in deriv_unfactored.args:
+                            future = executor.submit(factor, term)
+                            futures.append(future)
+                        
+                        myresults = [future.result() for future in concurrent.futures.as_completed(futures)]
                 
-                tmpnum, tmpden = fraction(deriv)
-                # deriv = collect(tmpnum,v) / tmpden
-                deriv = expand(tmpnum) / tmpden
+                deriv = sum(myresults)
+
                 print(f"Iteration {ii+1}: Final expression's numerator expanded")
             else:
-                print(f"Iteration {ii+1}: Simple expression with {len(tmpnum.args) if tmpnum.is_Add else 1} terms, using sequential processing")
+                print(f"Iteration {ii+1}: Simple expression with {len(tmpnum.args) if tmpnum.is_Add else 1} terms, differentiation directly")
                 deriv_unfactored = diff(deriv, (v, 1))
                 loop_diff_end = time.time()
                 
-                deriv = factor(deriv_unfactored)
+                    
+                if deriv_unfactored.is_Add:
+                    # now instead of gether the sum, we factor only each individual terms
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        futures = []
+                        for term in deriv_unfactored.args:
+                            future = executor.submit(factor, term)
+                            futures.append(future)
+                        
+                        myresults = [future.result() for future in concurrent.futures.as_completed(futures)]
+                
+                deriv = sum(myresults)
+
                 print(f"Iteration {ii+1}: Expression factored")
             
             loop_factor_end = time.time()
@@ -334,12 +324,34 @@ def my_residue(expr_in, v, pole, original_factor):
         
         t_loop = time.time()
         print(f"All {m-1} derivatives completed, calculating limit")
-        
-        res_unfactored = limit(deriv, v, pole) / factorial(m-1)
+
+        if deriv.is_Add:
+            # now instead of gether the sum, we factor only each individual terms
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for term in deriv.args:
+                    future = executor.submit(limit, term/ factorial(m-1), v, pole)
+                    futures.append(future)
+                
+                results = [future.result() for future in concurrent.futures.as_completed(futures)]
+            res_unfactored = sum(results)
+        else:
+            res_unfactored = limit(deriv, v, pole) / factorial(m-1)
         print(f"Limit calculated: {res_unfactored}")
         t_limit = time.time()
         
-        final_res = factor(res_unfactored)
+        if res_unfactored.is_Add:
+            # now instead of gether the sum, we factor only each individual terms
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for term in res_unfactored.args:
+                    future = executor.submit(factor, term)
+                    futures.append(future)
+                
+                results = [future.result() for future in concurrent.futures.as_completed(futures)]
+            final_res = sum(results)
+        else:
+            final_res = factor(res_unfactored)
         print(f"Final result factored: {final_res}")
         tf = time.time()
         

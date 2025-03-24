@@ -6,7 +6,7 @@ import sympy
 import concurrent.futures
 import os
 
-def optimized_add(expr1, expr2):
+def optimized_add(expr1, expr2, summary_timing=False):
     """
     Optimized addition for expressions that are products of a long polynomial and other factors.
     """
@@ -177,19 +177,20 @@ def optimized_add(expr1, expr2):
     final_time = time.time() - final_time_start
     total_time = time.time() - start_time
     
-    print(f"Optimized add timing breakdown (total: {total_time:.4f}s):")
-    print(f"  - Find components: {component_time:.4f}s (expr1: {time1:.4f}s, expr2: {time2:.4f}s)")
-    print(f"  - Common factor analysis: {common_factor_time:.4f}s")
-    print(f"    - Sorting: {sort_time:.4f}s")
-    print(f"    - Common simple factors: {common_simple_time:.4f}s")
-    print(f"    - Power factors: {pow_time:.4f}s")
-    print(f"  - Term calculation: {term_calc_time:.4f}s")
-    print(f"    - Expansion: {expand_time:.4f}s")
-    print(f"  - Final multiplication: {final_time:.4f}s")
+    if summary_timing:
+        print(f"Optimized add timing breakdown (total: {total_time:.4f}s):")
+        print(f"  - Find components: {component_time:.4f}s (expr1: {time1:.4f}s, expr2: {time2:.4f}s)")
+        print(f"  - Common factor analysis: {common_factor_time:.4f}s")
+        print(f"    - Sorting: {sort_time:.4f}s")
+        print(f"    - Common simple factors: {common_simple_time:.4f}s")
+        print(f"    - Power factors: {pow_time:.4f}s")
+        print(f"  - Term calculation: {term_calc_time:.4f}s")
+        print(f"    - Expansion: {expand_time:.4f}s")
+        print(f"  - Final multiplication: {final_time:.4f}s")
     
     return result
 
-def optimized_sum(expr_list, debug=False):
+def optimized_sum(expr_list, debug=False, summary_timing=False):
     """
     Optimized summation for a list of expressions that are products of a long polynomial and other factors.
     Follows the same logic as optimized_add but works on multiple expressions at once.
@@ -273,8 +274,8 @@ def optimized_sum(expr_list, debug=False):
     component_time_start = time.time()
     components = []
     component_times = []
-    
-    print(f"Processing {len(expr_list)} terms")
+    if summary_timing:
+        print(f"Processing {len(expr_list)} terms")
     for i, expr in enumerate(expr_list):
         if debug:
             print(f"\nExtracting components for term {i}:")
@@ -299,7 +300,8 @@ def optimized_sum(expr_list, debug=False):
                 print(f"  - Example power factor: {factor_types['power'][0]}")
     
     component_time = time.time() - component_time_start
-    print(f"Component extraction completed in {component_time:.4f}s")
+    if summary_timing:
+        print(f"Component extraction completed in {component_time:.4f}s")
     
     # Process factors to identify common ones
     factor_processing_start = time.time()
@@ -425,8 +427,9 @@ def optimized_sum(expr_list, debug=False):
     common_factors_time = time.time() - common_factors_start
     factor_processing_time = time.time() - factor_processing_start
 
-    print(f"Factor processing completed in {factor_processing_time:.4f}s")
-    print(f"Found {len(common_factors)} common factors")
+    if summary_timing:
+        print(f"Factor processing completed in {factor_processing_time:.4f}s")
+        print(f"Found {len(common_factors)} common factors")
 
     # The rest of the function continues as before, but using common_factors instead of 
     # common_simple_factors and common_pow_factors
@@ -454,7 +457,8 @@ def optimized_sum(expr_list, debug=False):
     expand_time = time.time() - expand_start
     term_calc_time = time.time() - term_calc_start
 
-    print(f"Term calculation completed in {term_calc_time:.4f}s (expand: {expand_time:.4f}s)")
+    if summary_timing:
+        print(f"Term calculation completed in {term_calc_time:.4f}s (expand: {expand_time:.4f}s)")
 
     if debug:
         print("\nExpanded sum information:")
@@ -497,12 +501,13 @@ def optimized_sum(expr_list, debug=False):
     final_time = time.time() - final_time_start
     total_time = time.time() - start_time
     
-    print(f"Optimized sum timing breakdown (total: {total_time:.4f}s):")
-    print(f"  - Find components: {component_time:.4f}s")
-    print(f"  - Factor processing: {factor_processing_time:.4f}s")
-    print(f"    - Common factors: {common_factors_time:.4f}s")
-    print(f"  - Term calculation: {term_calc_time:.4f}s")
-    print(f"    - Expansion: {expand_time:.4f}s")
-    print(f"  - Final multiplication: {final_time:.4f}s")
+    if summary_timing:
+        print(f"Optimized sum timing breakdown (total: {total_time:.4f}s):")
+        print(f"  - Find components: {component_time:.4f}s")
+        print(f"  - Factor processing: {factor_processing_time:.4f}s")
+        print(f"    - Common factors: {common_factors_time:.4f}s")
+        print(f"  - Term calculation: {term_calc_time:.4f}s")
+        print(f"    - Expansion: {expand_time:.4f}s")
+        print(f"  - Final multiplication: {final_time:.4f}s")
     
     return result

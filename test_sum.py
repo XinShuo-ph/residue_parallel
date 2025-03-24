@@ -9,7 +9,8 @@ import sys
 from sym_utils import optimized_sum
 import argparse
 
-do_debug = True
+do_debug = False
+print_timing = False
 
 def standard_sum(terms, debug=False):
     """The standard approach used in process_batch"""
@@ -174,7 +175,7 @@ def main():
     print("\n=== Testing optimized_sum approach ===")
     try:
         optimized_start = time.time()
-        result_optimized = optimized_sum(terms_to_use, debug=do_debug)
+        result_optimized = optimized_sum(terms_to_use, debug=do_debug, summary_timing=print_timing)
         optimized_end = time.time()
         print(f"Optimized approach total time: {optimized_end - optimized_start:.4f}s")
         optimized_succeeded = True
@@ -224,7 +225,7 @@ def main():
             # Optimized approach
             try:
                 optimized_start = time.time()
-                result_batch = optimized_sum(batch, debug=do_debug)
+                result_batch = optimized_sum(batch, debug=do_debug, summary_timing=print_timing)
                 optimized_end = time.time()
                 print(f"Optimized approach with {batch_size} terms: {optimized_end - optimized_start:.4f}s")
             except Exception as e:
@@ -263,7 +264,7 @@ def main():
         # Compare with one-shot optimized_sum
         try:
             oneshot_start = time.time()
-            result = optimized_sum(list(f_current.args[:5]), debug=do_debug)
+            result = optimized_sum(list(f_current.args[:5]), debug=do_debug, summary_timing=print_timing)
             oneshot_end = time.time()
             print(f"One-shot optimized_sum (5 terms): {oneshot_end - oneshot_start:.4f}s")
         except Exception as e:
