@@ -18,6 +18,9 @@ sympy.init_printing()  # for pretty printing if using an interactive environment
 
 threshold_deriv_terms = 3
 batch_size_lcm = 2
+residue_workers = 32
+over_subscribing_ratio = 8
+over_subscribing_ratio_final_factor = 1
 
 
 # Parse command line arguments
@@ -127,7 +130,7 @@ def my_residue(expr_in, v, pole, original_factor):
     Also, in this implementation I avoid doing any together, 
     will leave the sum to the final step
     """
-    expr = factor(expr_in)
+    expr = expr_in
     num, den = fraction(expr)
     # print(f"Starting residue calculation for {v} at pole {pole}")
     # print(f"Original expression numerator: {num}")
@@ -197,7 +200,7 @@ def my_residue(expr_in, v, pole, original_factor):
         if tmpnum1.is_Add and len(tmpnum1.args) > threshold_deriv_terms:
             # print(f"Large first derivative detected with {len(tmpnum1.args)} terms, using parallel processing")
             
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                 futures = []
                 for term in tmpnum1.args:
                     future = executor.submit(process_term, term, tmpden1, v)
@@ -213,7 +216,7 @@ def my_residue(expr_in, v, pole, original_factor):
 
             if deriv_unfactored.is_Add:
                 # now instead of gether the sum, we factor only each individual terms
-                with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                     futures = []
                     for term in deriv_unfactored.args:
                         future = executor.submit(factor, term)
@@ -241,7 +244,7 @@ def my_residue(expr_in, v, pole, original_factor):
 
             if deriv_unfactored.is_Add:
                 # now instead of gether the sum, we factor only each individual terms
-                with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                     futures = []
                     for term in deriv_unfactored.args:
                         future = executor.submit(factor, term)
@@ -273,7 +276,7 @@ def my_residue(expr_in, v, pole, original_factor):
                 # print(f"Iteration {ii+1}: Large expression detected with {len(deriv.args)} terms, using parallel processing")
                 loop_diff_start = time.time()
                
-                with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                     futures = []
                     for term in deriv.args:
                         future = executor.submit(diff, term, (v,1))
@@ -288,7 +291,7 @@ def my_residue(expr_in, v, pole, original_factor):
                     
                 if deriv_unfactored.is_Add:
                     # now instead of gether the sum, we factor only each individual terms
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                         futures = []
                         for term in deriv_unfactored.args:
                             future = executor.submit(factor, term)
@@ -307,7 +310,7 @@ def my_residue(expr_in, v, pole, original_factor):
                     
                 if deriv_unfactored.is_Add:
                     # now instead of gether the sum, we factor only each individual terms
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                         futures = []
                         for term in deriv_unfactored.args:
                             future = executor.submit(factor, term)
@@ -329,7 +332,7 @@ def my_residue(expr_in, v, pole, original_factor):
 
         if deriv.is_Add:
             # now instead of gether the sum, we factor only each individual terms
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                 futures = []
                 for term in deriv.args:
                     future = executor.submit(limit, term/ factorial(m-1), v, pole)
@@ -344,7 +347,7 @@ def my_residue(expr_in, v, pole, original_factor):
         
         if res_unfactored.is_Add:
             # now instead of gether the sum, we factor only each individual terms
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=residue_workers) as executor:
                 futures = []
                 for term in res_unfactored.args:
                     future = executor.submit(factor, term)
@@ -525,49 +528,173 @@ for i, v in enumerate(integration_order):
     residues = []
     if inside_poles:
         if f_current.is_Add:
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                for idx, cp in enumerate(inside_poles):
-                    term_futures = []  # initialize list for each candidate pole
-                    start_time = time.time()  # Record start time
+            for idx, cp in enumerate(inside_poles):
+                if inside_highest_orders[idx] > 1:
+                    # Separate terms based on pole order
+                    separate_first_order_start = time.time()
+                    first_order_terms = []
+                    higher_order_terms = []
                     
-                    for term in f_current.args:
-                        # print("Submitting term:", term, "for variable:", v, "with pole:", cp, "due to factor", inside_factors[idx])
-                        term_futures.append(executor.submit(my_residue, term, v, cp, inside_factors[idx]))
-                    
-                    # Monitor progress as futures complete
-                    completed = 0
-                    total = len(term_futures)
-                    res_values = []
-                    last_percentage = -1  # Initialize to ensure first update is printed
-                    
-                    for future in concurrent.futures.as_completed(term_futures):
-                        completed += 1
-                        current_percentage = int((completed / total) * 100)
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        # Submit jobs to check pole order for each term
+                        future_to_term = {}
+                        for term in f_current.args:
+                            future = executor.submit(order_by_args, fraction(term)[1], v, cp, inside_factors[idx])
+                            future_to_term[future] = term
                         
-                        # Only print when percentage changes by at least 1%
-                        if current_percentage > last_percentage:
-                            elapsed_time = time.time() - start_time
-                            
-                            # Estimate remaining time
-                            if completed > 0:
-                                time_per_task = elapsed_time / completed
-                                remaining_tasks = total - completed
-                                remaining_time = time_per_task * remaining_tasks
-                                
-                                print(f"Progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
-                                      f"Elapsed: {elapsed_time:.1f}s, Est. remaining: {remaining_time:.1f}s")
+                        # Process results as they complete
+                        for future in concurrent.futures.as_completed(future_to_term):
+                            order = future.result()
+                            term = future_to_term[future]
+                            if order == 1:
+                                first_order_terms.append(term)
                             else:
-                                print(f"Progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
-                                      f"Elapsed: {elapsed_time:.1f}s")
-                            
-                            last_percentage = current_percentage
-                        
-                        res_values.append(future.result())
+                                higher_order_terms.append(term)
                     
-                    total_time = time.time() - start_time
-                    res_sum_cp = sum(res_values)
-                    print(f"Residue for candidate pole {cp} is: {res_sum_cp} (completed in {total_time:.1f}s)")
-                    residues.append(res_sum_cp)
+                    separate_first_order_end = time.time()
+                    print(f"Pole {cp}: Separated {len(first_order_terms)} first-order terms and {len(higher_order_terms)} higher-order terms in {separate_first_order_end - separate_first_order_start:.2f}s")
+
+                    # Process first-order terms (using more workers as these are faster to compute)
+                    first_order_start = time.time()
+                    first_order_residues = []
+                    
+                    if first_order_terms:
+                        with concurrent.futures.ProcessPoolExecutor(max_workers=int(max_workers)) as executor:
+                            # Submit jobs for first-order residues
+                            term_futures = []
+                            start_time = time.time()
+                            
+                            for term in first_order_terms:
+                                term_futures.append(executor.submit(my_residue, term, v, cp, inside_factors[idx]))
+                            
+                            # Monitor progress as futures complete
+                            completed = 0
+                            total = len(term_futures)
+                            last_percentage = -1
+                            
+                            for future in concurrent.futures.as_completed(term_futures):
+                                completed += 1
+                                current_percentage = int((completed / total) * 100)
+                                
+                                # Only print when percentage changes by at least 1%
+                                if current_percentage > last_percentage:
+                                    elapsed_time = time.time() - start_time
+                                    
+                                    # Estimate remaining time
+                                    if completed > 0:
+                                        time_per_task = elapsed_time / completed
+                                        remaining_tasks = total - completed
+                                        remaining_time = time_per_task * remaining_tasks
+                                        
+                                        print(f"First-order terms progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                              f"Elapsed: {elapsed_time:.1f}s, Est. remaining: {remaining_time:.1f}s")
+                                    else:
+                                        print(f"First-order terms progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                              f"Elapsed: {elapsed_time:.1f}s")
+                                    
+                                    last_percentage = current_percentage
+                                
+                                first_order_residues.append(future.result())
+                    
+                    first_order_end = time.time()
+                    print(f"Processed {len(first_order_terms)} first-order terms in {first_order_end - first_order_start:.2f}s")
+
+                    # Process higher-order terms (using fewer worker groups as these are more compute-intensive)
+                    higher_order_start = time.time()
+                    higher_order_residues = []
+                    
+                    if higher_order_terms:
+                        with concurrent.futures.ProcessPoolExecutor(max_workers=int(over_subscribing_ratio*max_workers/residue_workers)) as executor:
+                            # Submit jobs for higher-order residues
+                            term_futures = []
+                            start_time = time.time()
+                            
+                            for term in higher_order_terms:
+                                term_futures.append(executor.submit(my_residue, term, v, cp, inside_factors[idx]))
+                            
+                            # Monitor progress as futures complete
+                            completed = 0
+                            total = len(term_futures)
+                            last_percentage = -1
+                            
+                            for future in concurrent.futures.as_completed(term_futures):
+                                completed += 1
+                                current_percentage = int((completed / total) * 100)
+                                
+                                # Only print when percentage changes by at least 1%
+                                if current_percentage > last_percentage:
+                                    elapsed_time = time.time() - start_time
+                                    
+                                    # Estimate remaining time
+                                    if completed > 0:
+                                        time_per_task = elapsed_time / completed
+                                        remaining_tasks = total - completed
+                                        remaining_time = time_per_task * remaining_tasks
+                                        
+                                        print(f"Higher-order terms progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                              f"Elapsed: {elapsed_time:.1f}s, Est. remaining: {remaining_time:.1f}s")
+                                    else:
+                                        print(f"Higher-order terms progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                              f"Elapsed: {elapsed_time:.1f}s")
+                                    
+                                    last_percentage = current_percentage
+                                
+                                higher_order_residues.append(future.result())
+                    
+                    higher_order_end = time.time()
+                    print(f"Processed {len(higher_order_terms)} higher-order terms in {higher_order_end - higher_order_start:.2f}s")
+                    
+                    # Combine results
+                    combine_start = time.time()
+                    combined_residues = sum(first_order_residues + higher_order_residues)
+                    residues.append(combined_residues)
+                    combine_end = time.time()
+                    print(f"sum() takes {combine_end - combine_start:.1f}s")
+                    print(f"(completed in {combine_end - separate_first_order_start:.1f}s) Combined residue for candidate pole {cp} is: {combined_residues}")
+                    
+                else:
+                    # For poles with only first-order terms, use the original approach
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        term_futures = []  # initialize list for each candidate pole
+                        start_time = time.time()  # Record start time
+                        
+                        for term in f_current.args:
+                            term_futures.append(executor.submit(my_residue, term, v, cp, inside_factors[idx]))
+                        
+                        # Monitor progress as futures complete
+                        completed = 0
+                        total = len(term_futures)
+                        res_values = []
+                        last_percentage = -1  # Initialize to ensure first update is printed
+                        
+                        for future in concurrent.futures.as_completed(term_futures):
+                            completed += 1
+                            current_percentage = int((completed / total) * 100)
+                            
+                            # Only print when percentage changes by at least 1%
+                            if current_percentage > last_percentage:
+                                elapsed_time = time.time() - start_time
+                                
+                                # Estimate remaining time
+                                if completed > 0:
+                                    time_per_task = elapsed_time / completed
+                                    remaining_tasks = total - completed
+                                    remaining_time = time_per_task * remaining_tasks
+                                    
+                                    print(f"Progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                          f"Elapsed: {elapsed_time:.1f}s, Est. remaining: {remaining_time:.1f}s")
+                                else:
+                                    print(f"Progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                          f"Elapsed: {elapsed_time:.1f}s")
+                                
+                                last_percentage = current_percentage
+                            
+                            res_values.append(future.result())
+                        
+                        total_time = time.time() - start_time
+                        res_sum_cp = sum(res_values)
+                        print(f"(completed in {total_time:.1f}s) Residue for candidate pole {cp} is: {res_sum_cp} ")
+                        residues.append(res_sum_cp)
         else:
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 future_to_pole = {
@@ -591,6 +718,99 @@ for i, v in enumerate(integration_order):
 # # this step is extremely time consuming, costing ~5 hours for N=5
 # # there should be a way to parallelize this sum of large number of terms
 # final_result = factor(f_current)
+
+
+# before final factorization, save a intermediate result in mathematica format
+# Save intermediate result before final factorization
+intermediate_mathematica_filename = f"intermediate_result_N{n}.m"
+print(f"Saving intermediate result to Mathematica file: {intermediate_mathematica_filename}")
+
+intermediate_math_start = time.time()
+
+try:
+    
+    # Open file for writing
+    with open(intermediate_mathematica_filename, 'w') as math_file:
+        # Write file header
+        math_file.write("intermediateResult = ")
+        
+        # Check if result is a sum or single term
+        if f_current.is_Add:
+            terms = list(f_current.args)
+            num_terms = len(terms)
+            print(f"Converting {num_terms} terms to Mathematica format in parallel")
+            
+            # Write opening bracket for sum
+            math_file.write("(")
+            
+            # Process in batches of max_workers size
+            batch_size_intermediate = max_workers
+            start_time = time.time()
+            completed_terms = 0
+            last_percentage = -1
+            total_batches = (num_terms + batch_size_intermediate - 1) // batch_size_intermediate
+            
+            for batch_idx in range(0, num_terms, batch_size_intermediate):
+                # Create batch of terms
+                end_idx = min(batch_idx + batch_size_intermediate, num_terms)
+                terms_batch = terms[batch_idx:end_idx]
+                batch_size_actual = len(terms_batch)
+                
+                # Process batch in parallel
+                with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    # Convert terms to Mathematica code
+                    math_terms = list(executor.map(mathematica_code, terms_batch))
+                
+                # Write terms to file
+                for i, math_term in enumerate(math_terms):
+                    if batch_idx > 0 or i > 0:  # Add plus sign except for the first term
+                        math_file.write(" + ")
+                    math_file.write(math_term)
+                    
+                    # Flush to disk periodically
+                    if (batch_idx + i) % 100 == 0:
+                        math_file.flush()
+                
+                # Update progress
+                completed_terms += batch_size_actual
+                current_percentage = int((completed_terms / num_terms) * 100)
+                
+                # Only print when percentage changes by at least 1%
+                if current_percentage > last_percentage:
+                    elapsed_time = time.time() - start_time
+                    batch_num = batch_idx // batch_size_intermediate + 1
+                    
+                    # Estimate remaining time
+                    if completed_terms > 0:
+                        time_per_term = elapsed_time / completed_terms
+                        remaining_terms = num_terms - completed_terms
+                        remaining_time = time_per_term * remaining_terms
+                        
+                        print(f"Mathematica conversion: {current_percentage}% ({completed_terms}/{num_terms}) - "
+                              f"Batch {batch_num}/{total_batches} - "
+                              f"Elapsed: {elapsed_time:.1f}s, Est. remaining: {remaining_time:.1f}s")
+                    else:
+                        print(f"Mathematica conversion: {current_percentage}% ({completed_terms}/{num_terms}) - "
+                              f"Elapsed: {elapsed_time:.1f}s")
+                    
+                    last_percentage = current_percentage
+            
+            # Write closing bracket for sum
+            math_file.write(")")
+        else:
+            # For a single term, convert directly
+            math_file.write(mathematica_code(f_current))
+        
+        # Write file footer
+        math_file.write(";")
+    
+    intermediate_math_end = time.time()
+    print(f"Intermediate result successfully saved to {intermediate_mathematica_filename}")
+    print(f"Total intermediate Mathematica export time: {intermediate_math_end - intermediate_math_start:.3f} seconds")
+except Exception as e:
+    print(f"Error saving intermediate result to Mathematica file: {e}")
+    print(f"Exception details: {str(e)}")
+
 
 def process_batch_old(terms_batch):
     """Process a batch of terms: combine, fraction, expand numerator, and factor."""
@@ -638,7 +858,7 @@ if f_current.is_Add and len(f_current.args) > batch_size:
         total_batches = len(batches)
         last_percentage = -1
 
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=int(max_workers*over_subscribing_ratio_final_factor)) as executor:
             futures = []
             for batch in batches:
                 futures.append(executor.submit(process_batch, batch))
