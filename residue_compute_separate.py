@@ -17,6 +17,7 @@ sympy.init_printing()  # for pretty printing if using an interactive environment
 
 
 threshold_deriv_terms = 3
+batch_size_lcm = 2
 
 
 # Parse command line arguments
@@ -128,15 +129,15 @@ def my_residue(expr_in, v, pole, original_factor):
     """
     expr = factor(expr_in)
     num, den = fraction(expr)
-    print(f"Starting residue calculation for {v} at pole {pole}")
-    print(f"Original expression numerator: {num}")
-    print(f"Original expression denominator: {den}")
+    # print(f"Starting residue calculation for {v} at pole {pole}")
+    # print(f"Original expression numerator: {num}")
+    # print(f"Original expression denominator: {den}")
     
     m = order_by_args(den, v, pole, original_factor)
-    print("Computed order for the pole at ", pole, "is", m, " for denominator ", den)
+    # print("Computed order for the pole at ", pole, "is", m, " for denominator ", den)
     
     if m == 0:
-        print(f"Order is 0, returning zero")
+        # print(f"Order is 0, returning zero")
         return sympy.S.Zero
     elif m == 1:
         t_start = time.time()
@@ -160,13 +161,14 @@ def my_residue(expr_in, v, pole, original_factor):
 
         t_total = t6 - t_start
 
-        print(f"Order is 1, numerator at pole: {num_at_pole}")
-        print(f"Derivative of denominator at pole: {diff_den}")
-        print(f"Residue result: {result}")
-        print(f"Derivative of denominator at pole: {diff_den_factored}")
-        print(f"Residue result: {result}")
+        # print(f"Order is 1, numerator at pole: {num_at_pole}")
+        # print(f"Derivative of denominator at pole: {diff_den}")
+        # print(f"Residue result: {result}")
+        # print(f"Derivative of denominator at pole: {diff_den_factored}")
+        # print(f"Residue result: {result}")
 
         if t_total > 2.0:
+            print("For term", expr, "num_at_pole=",num_at_pole)
             print(f"Timing breakdown for order=1 residue calculation (total: {t_total:.3f}s):")
             print(f"  - Differentiate denominator: {t2-t1:.3f}s")
             print(f"  - Substitute pole value: {t3-t2:.3f}s")
@@ -175,8 +177,8 @@ def my_residue(expr_in, v, pole, original_factor):
             print(f"  - Factor final result: {t6-t5:.3f}s")
         return result
     else:
-        print("High order pole at", v, "=", pole, "of order", m)
-        print(f"Using step-by-step derivative approach for order {m}")
+        # print("High order pole at", v, "=", pole, "of order", m)
+        # print(f"Using step-by-step derivative approach for order {m}")
         ### the following few lines are the key to make the calculation possible
         ### the built-in residue() function of sympy would take forever to get higher order residues
         ti = time.time()
@@ -185,15 +187,15 @@ def my_residue(expr_in, v, pole, original_factor):
                 
         # Handle large expressions in the first derivative
         tmpnum1, tmpden1 = fraction(factor((v - pole)**m * expr))
-        print(f"First derivative split into fractions")
+        # print(f"First derivative split into fractions")
 
         # Expand and collect the numerator before checking size
         tmpnum1 = collect(expand(tmpnum1), v)
-        print(f"First derivative numerator expanded and collected")
+        # print(f"First derivative numerator expanded and collected")
         
         # If numerator is a large sum, process it in parallel
         if tmpnum1.is_Add and len(tmpnum1.args) > threshold_deriv_terms:
-            print(f"Large first derivative detected with {len(tmpnum1.args)} terms, using parallel processing")
+            # print(f"Large first derivative detected with {len(tmpnum1.args)} terms, using parallel processing")
             
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 futures = []
@@ -206,7 +208,7 @@ def my_residue(expr_in, v, pole, original_factor):
             # deriv = sum(results)
 
             deriv_unfactored = sum(results)
-            print(f"First derivative parallel processing completed")
+            # print(f"First derivative parallel processing completed")
             t_diff_first = time.time()
 
             if deriv_unfactored.is_Add:
@@ -221,14 +223,14 @@ def my_residue(expr_in, v, pole, original_factor):
             
             deriv = sum(myresults)
 
-            print(f"First derivative parallel processing completed")
+            # print(f"First derivative parallel processing completed")
         else:
             # For smaller expressions, use the original approach
             
             # First derivative
             ## doing a factor() before diff() save a lot of time (~2 times speedup)
             deriv_unfactored = diff(factor((v - pole)**m * expr), (v, 1))
-            print(f"First derivative completed")
+            # print(f"First derivative completed")
             t_diff_first = time.time()
 
             ## doing factor() is still slow (~60 seconds) even if expr numerator is short
@@ -250,7 +252,7 @@ def my_residue(expr_in, v, pole, original_factor):
             deriv = sum(myresults)
 
 
-            print(f"First derivative factored: {deriv}")
+            # print(f"First derivative factored: {deriv}")
         
     
         t_factor_first = time.time()
@@ -261,14 +263,14 @@ def my_residue(expr_in, v, pole, original_factor):
         
         # Remaining derivatives
         for ii in range(m-2):
-            print(f"Processing derivative {ii+2} of {m-1}")
+            # print(f"Processing derivative {ii+2} of {m-1}")
             loop_start = time.time()
             
             
             # Process differentiation in parallel if tmpnum is large
             if deriv.is_Add and len(deriv.args) > threshold_deriv_terms:
             # It seems like we never entered this branch for N<=5
-                print(f"Iteration {ii+1}: Large expression detected with {len(deriv.args)} terms, using parallel processing")
+                # print(f"Iteration {ii+1}: Large expression detected with {len(deriv.args)} terms, using parallel processing")
                 loop_diff_start = time.time()
                
                 with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -280,7 +282,7 @@ def my_residue(expr_in, v, pole, original_factor):
                     results = [future.result() for future in concurrent.futures.as_completed(futures)]
                 
                 deriv_unfactored = sum(results)
-                print(f"Iteration {ii+1}: Parallel differentiation completed")
+                # print(f"Iteration {ii+1}: Parallel differentiation completed")
                 loop_diff_end = time.time()
                 
                     
@@ -296,9 +298,9 @@ def my_residue(expr_in, v, pole, original_factor):
                 
                 deriv = sum(myresults)
 
-                print(f"Iteration {ii+1}: Final expression's numerator expanded")
+                # print(f"Iteration {ii+1}: Final expression's numerator expanded")
             else:
-                print(f"Iteration {ii+1}: Simple expression with {len(tmpnum.args) if tmpnum.is_Add else 1} terms, differentiation directly")
+                # print(f"Iteration {ii+1}: Simple expression with {len(tmpnum.args) if tmpnum.is_Add else 1} terms, differentiation directly")
                 deriv_unfactored = diff(deriv, (v, 1))
                 loop_diff_end = time.time()
                 
@@ -315,7 +317,7 @@ def my_residue(expr_in, v, pole, original_factor):
                 
                 deriv = sum(myresults)
 
-                print(f"Iteration {ii+1}: Expression factored")
+                # print(f"Iteration {ii+1}: Expression factored")
             
             loop_factor_end = time.time()
             loop_times.append(loop_factor_end - loop_start)
@@ -323,7 +325,7 @@ def my_residue(expr_in, v, pole, original_factor):
             loop_factor_times.append(loop_factor_end - loop_diff_end)
         
         t_loop = time.time()
-        print(f"All {m-1} derivatives completed, calculating limit")
+        # print(f"All {m-1} derivatives completed, calculating limit")
 
         if deriv.is_Add:
             # now instead of gether the sum, we factor only each individual terms
@@ -337,7 +339,7 @@ def my_residue(expr_in, v, pole, original_factor):
             res_unfactored = sum(results)
         else:
             res_unfactored = limit(deriv, v, pole) / factorial(m-1)
-        print(f"Limit calculated: {res_unfactored}")
+        # print(f"Limit calculated: {res_unfactored}")
         t_limit = time.time()
         
         if res_unfactored.is_Add:
@@ -352,14 +354,15 @@ def my_residue(expr_in, v, pole, original_factor):
             final_res = sum(results)
         else:
             final_res = factor(res_unfactored)
-        print(f"Final result factored: {final_res}")
+        # print(f"Final result factored: {final_res}")
         tf = time.time()
         
-        print("For term", expr, "\nHigh order pole at", v, "=", pole, "of order", m, " takes total", tf-ti, "seconds")
-        print(f"  - diff1: {t_diff_first-ti:.3f}s, factor1: {t_factor_first-t_diff_first:.3f}s, loop: {t_loop-t_factor_first:.3f}s, limit: {t_limit-t_loop:.3f}s, factor2: {tf-t_limit:.3f}s")
-        if loop_times:
-            loop_str = ", ".join([f"iter{i}: {t:.3f}s (diff: {dt:.3f}s, factor: {ft:.3f}s)" for i, (t, dt, ft) in enumerate(zip(loop_times, loop_diff_times, loop_factor_times))])
-            print(f"  - Loop iterations: {loop_str}")
+        if tf-ti > 10:
+            print("For term", expr, "\nHigh order pole at", v, "=", pole, "of order", m, " takes total", tf-ti, "seconds")
+            print(f"  - diff1: {t_diff_first-ti:.3f}s, factor1: {t_factor_first-t_diff_first:.3f}s, loop: {t_loop-t_factor_first:.3f}s, limit: {t_limit-t_loop:.3f}s, factor2: {tf-t_limit:.3f}s")
+            if loop_times:
+                loop_str = ", ".join([f"iter{i}: {t:.3f}s (diff: {dt:.3f}s, factor: {ft:.3f}s)" for i, (t, dt, ft) in enumerate(zip(loop_times, loop_diff_times, loop_factor_times))])
+                print(f"  - Loop iterations: {loop_str}")
         return final_res
 ###############################################################################
 # ITERATED INTEGRATION: PARALLEL RESIDUE CALCULATION
@@ -381,23 +384,90 @@ for i, v in enumerate(integration_order):
         num_terms = 1
     print("Number of terms in f_current:", num_terms)
     
-    # 1. Write f_current as a single rational expression.
-    # num_expr, den_expr = fraction(together(f_current))
-    
+
+    # 1. Find common denominator using batched together() approach
     together_start = time.time()
-    f_together = together(f_current)
+
+    # This is specifically for finding the common denominator
+    def process_denominator_batch(terms_batch):
+        """Process a batch of terms to find their common denominator."""
+        combined = together(sum(terms_batch))
+        _, den = fraction(combined)
+        return den
+
+    if f_current.is_Add and len(f_current.args) > batch_size_lcm:
+        print(f"Large expression with {len(f_current.args)} terms detected for denominator calculation")
+        print(f"Using batch processing with batch_size_lcm={batch_size_lcm}")
+        
+        # Copy f_current to tmp_current for denominator processing
+        tmp_current = f_current
+        den_expr = None
+        
+        # Iteration counter
+        iteration = 1
+        
+        # Process in batches until we get a single denominator
+        while tmp_current.is_Add and len(tmp_current.args) > batch_size_lcm:
+            batch_start = time.time()
+            terms = list(tmp_current.args)
+            num_terms = len(terms)
+            num_batches = (num_terms + batch_size_lcm - 1) // batch_size_lcm  # Ceiling division
+            
+            print(f"Denominator iteration {iteration}: Processing {num_terms} terms in {num_batches} batches")
+            
+            # Create batches
+            batches = []
+            for idx_batch in range(0, num_terms, batch_size_lcm):
+                batch = terms[idx_batch:idx_batch + batch_size_lcm]
+                batches.append(batch)
+            
+            # Process batches in parallel
+            batch_denominators = []
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for batch in batches:
+                    futures.append(executor.submit(process_denominator_batch, batch))
+                
+                for future in concurrent.futures.as_completed(futures):
+                    batch_denominators.append(future.result())
+            
+            # Create new terms with numerator=1 for each batch denominator
+            new_terms = [1/den for den in batch_denominators]
+            
+            # Update tmp_current with new terms for next iteration
+            tmp_current = sum(new_terms)
+            
+            batch_end = time.time()
+            print(f"Denominator iteration {iteration} completed in {batch_end - batch_start:.3f} seconds")
+            print(f"Reduced to {len(tmp_current.args) if tmp_current.is_Add else 1} terms")
+            
+            iteration += 1
+        
+        # Final denominator calculation
+        if tmp_current.is_Add:
+            print("Computing final denominator...")
+            combined = together(tmp_current)
+            _, den_expr = fraction(combined)
+        else:
+            # Already a single term
+            _, den_expr = fraction(tmp_current)
+    else:
+        # For smaller expressions, use the direct approach
+        print("Expression small enough for direct denominator calculation")
+        if f_current.is_Add:
+            combined = together(f_current)
+            _, den_expr = fraction(combined)
+        else:
+            _, den_expr = fraction(f_current)
+
     together_end = time.time()
-    
-    fraction_start = time.time()
-    num_expr, den_expr = fraction(f_together)
-    fraction_end = time.time()
-    
-    print(f"Time for together(): {together_end - together_start:.3f} seconds")
-    print(f"Time for fraction(): {fraction_end - fraction_start:.3f} seconds")
-    print(f"Total time for rational expression conversion: {fraction_end - together_start:.3f} seconds")
-    
+    print(f"Total time for denominator calculation: {together_end - together_start:.3f} seconds")
+
     # 2. Factor the denominator.
+    factor_start = time.time()
     coeff, factors_list = factor_list(den_expr)
+    factor_end = time.time()
+    print(f"Time to factor denominator: {factor_end - factor_start:.3f} seconds")
     factors = [f for f, exp in factors_list]
     orders = [exp for f, exp in factors_list]
     print("Factors of the denominator:")
@@ -458,12 +528,45 @@ for i, v in enumerate(integration_order):
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 for idx, cp in enumerate(inside_poles):
                     term_futures = []  # initialize list for each candidate pole
+                    start_time = time.time()  # Record start time
+                    
                     for term in f_current.args:
-                        print("Submitting term:", term, "for variable:", v, "with pole:", cp, "due to factor", inside_factors[idx])
+                        # print("Submitting term:", term, "for variable:", v, "with pole:", cp, "due to factor", inside_factors[idx])
                         term_futures.append(executor.submit(my_residue, term, v, cp, inside_factors[idx]))
-                    res_values = [future.result() for future in term_futures]
+                    
+                    # Monitor progress as futures complete
+                    completed = 0
+                    total = len(term_futures)
+                    res_values = []
+                    last_percentage = -1  # Initialize to ensure first update is printed
+                    
+                    for future in concurrent.futures.as_completed(term_futures):
+                        completed += 1
+                        current_percentage = int((completed / total) * 100)
+                        
+                        # Only print when percentage changes by at least 1%
+                        if current_percentage > last_percentage:
+                            elapsed_time = time.time() - start_time
+                            
+                            # Estimate remaining time
+                            if completed > 0:
+                                time_per_task = elapsed_time / completed
+                                remaining_tasks = total - completed
+                                remaining_time = time_per_task * remaining_tasks
+                                
+                                print(f"Progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                      f"Elapsed: {elapsed_time:.1f}s, Est. remaining: {remaining_time:.1f}s")
+                            else:
+                                print(f"Progress for pole {cp}: {current_percentage}% ({completed}/{total}) - "
+                                      f"Elapsed: {elapsed_time:.1f}s")
+                            
+                            last_percentage = current_percentage
+                        
+                        res_values.append(future.result())
+                    
+                    total_time = time.time() - start_time
                     res_sum_cp = sum(res_values)
-                    print("Residue for candidate pole", cp, "is:", res_sum_cp)
+                    print(f"Residue for candidate pole {cp} is: {res_sum_cp} (completed in {total_time:.1f}s)")
                     residues.append(res_sum_cp)
         else:
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -530,12 +633,38 @@ if f_current.is_Add and len(f_current.args) > batch_size:
         
         # Process batches in parallel
         batch_results = []
+        start_time = time.time()
+        completed_batches = 0
+        total_batches = len(batches)
+        last_percentage = -1
+
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for batch in batches:
                 futures.append(executor.submit(process_batch, batch))
             
             for future in concurrent.futures.as_completed(futures):
+                completed_batches += 1
+                current_percentage = int((completed_batches / total_batches) * 100)
+                
+                # Only print when percentage changes by at least 1%
+                if current_percentage > last_percentage:
+                    elapsed_time = time.time() - start_time
+                    
+                    # Estimate remaining time
+                    if completed_batches > 0:
+                        time_per_batch = elapsed_time / completed_batches
+                        remaining_batches = total_batches - completed_batches
+                        remaining_time = time_per_batch * remaining_batches
+                        
+                        print(f"Batch progress: {current_percentage}% ({completed_batches}/{total_batches}) - "
+                              f"Elapsed: {elapsed_time:.1f}s, Est. remaining: {remaining_time:.1f}s")
+                    else:
+                        print(f"Batch progress: {current_percentage}% ({completed_batches}/{total_batches}) - "
+                              f"Elapsed: {elapsed_time:.1f}s")
+                    
+                    last_percentage = current_percentage
+                
                 batch_results.append(future.result())
         
         # Update f_current with the processed results
