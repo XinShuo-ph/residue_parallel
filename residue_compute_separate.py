@@ -9,6 +9,20 @@ import os
 import argparse
 from sym_utils import optimized_sum, optimized_add
 
+import psutil  
+
+def get_memory_usage():
+    """Return memory usage in MB"""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    return mem_info.rss / (1024 * 1024)  # Convert bytes to MB
+
+def log_memory(label):
+    """Log current memory usage with a label"""
+    mem_mb = get_memory_usage()
+    if mem_mb > 100:  # Only log if >100MB
+        print(f"Memory usage ({label}): {mem_mb:.2f} MB")
+
 sympy.init_printing()  # for pretty printing if using an interactive environment
 
 ###############################################################################
@@ -113,6 +127,21 @@ def order_by_args(den, v, pole,original_factor):
         if ratio.is_number and (ratio == 1 or ratio == -1):
             order += exp
     return order
+
+def check_term_order(term, v, pole,original_factor):
+    _, den = fraction(term)
+    test = original_factor.subs(v, pole)
+    if test!=0:
+        print("Please check the test for variable", v, "at pole", pole, "with the original factor", original_factor)
+        print(" test here is", test)
+    coeff, fac_list = factor_list(den)
+    order = 0
+    for fac, exp in fac_list:
+        # Divide fac by (v-pole) and check if the factor differs only by a sign.
+        ratio = simplify(fac / original_factor)
+        if ratio.is_number and (ratio == 1 or ratio == -1):
+            order += exp
+    return [order,term]
 
 
 def process_term(term,tmpden,v):
@@ -413,6 +442,14 @@ for i, v in enumerate(integration_order):
         while tmp_current.is_Add and len(tmp_current.args) > batch_size_lcm:
             batch_start = time.time()
             terms = list(tmp_current.args)
+            
+            # # Extract denominator from each term
+            # terms_denominators = []
+            # for arg in tmp_current.args:
+            #     _, den = fraction(arg)
+            #     terms_denominators.append(1/den)
+            # terms = terms_denominators
+
             num_terms = len(terms)
             num_batches = (num_terms + batch_size_lcm - 1) // batch_size_lcm  # Ceiling division
             
@@ -534,22 +571,29 @@ for i, v in enumerate(integration_order):
                     separate_first_order_start = time.time()
                     first_order_terms = []
                     higher_order_terms = []
+
+                    log_memory("at separating poles, before defining executors")
                     
                     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                         # Submit jobs to check pole order for each term
-                        future_to_term = {}
+                        # future_to_term = {}
+                        term_futures = []
                         for term in f_current.args:
-                            future = executor.submit(order_by_args, fraction(term)[1], v, cp, inside_factors[idx])
-                            future_to_term[future] = term
+                            term_futures.append( executor.submit(check_term_order, term, v, cp, inside_factors[idx]) )
+                            # future_to_term[future] = term
                         
+                        log_memory("after submitted checking order jobs")
+
                         # Process results as they complete
-                        for future in concurrent.futures.as_completed(future_to_term):
-                            order = future.result()
-                            term = future_to_term[future]
+                        for future in concurrent.futures.as_completed(term_futures):
+                            order, term = future.result()
+                            # term = future_to_term[future]
                             if order == 1:
                                 first_order_terms.append(term)
                             else:
                                 higher_order_terms.append(term)
+                        
+                        log_memory("after finished checking order jobs")
                     
                     separate_first_order_end = time.time()
                     print(f"Pole {cp}: Separated {len(first_order_terms)} first-order terms and {len(higher_order_terms)} higher-order terms in {separate_first_order_end - separate_first_order_start:.2f}s")
