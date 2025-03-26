@@ -31,9 +31,9 @@ sympy.init_printing()  # for pretty printing if using an interactive environment
 
 
 threshold_deriv_terms = 3
-batch_size_lcm = 2
+batch_size_lcm = 5
 residue_workers = 32
-over_subscribing_ratio = 8
+over_subscribing_ratio = 8 # 以前用8是因为之前把order=0也归进higher order pole里面了所以有很多process根本没运行
 over_subscribing_ratio_final_factor = 1
 
 
@@ -215,6 +215,8 @@ def my_residue(expr_in, v, pole, original_factor):
         ### the built-in residue() function of sympy would take forever to get higher order residues
         ti = time.time()
 
+        deriv = 0 # define derive in this scope
+
         # we may still assume the expression passed in is small enough so we can safely do factor in finite time
                 
         # Handle large expressions in the first derivative
@@ -252,8 +254,9 @@ def my_residue(expr_in, v, pole, original_factor):
                         futures.append(future)
                     
                     myresults = [future.result() for future in concurrent.futures.as_completed(futures)]
-            
-            deriv = sum(myresults)
+                deriv = sum(myresults)
+            else: # if there'ss only one term
+                deriv = factor(deriv_unfactored)
 
             # print(f"First derivative parallel processing completed")
         else:
@@ -280,8 +283,9 @@ def my_residue(expr_in, v, pole, original_factor):
                         futures.append(future)
                     
                     myresults = [future.result() for future in concurrent.futures.as_completed(futures)]
-            
-            deriv = sum(myresults)
+                deriv = sum(myresults)
+            else: # if there'ss only one term
+                deriv = factor(deriv_unfactored)
 
 
             # print(f"First derivative factored: {deriv}")
@@ -563,6 +567,10 @@ for i, v in enumerate(integration_order):
     
     # 5. Compute and sum the residues.
     residues = []
+    # will defining these things outside the loop avoid copying over large var across different processes?
+    combined_residues = 0
+    first_order_residues = []
+    higher_order_residues = []
     if inside_poles:
         if f_current.is_Add:
             for idx, cp in enumerate(inside_poles):
@@ -584,13 +592,19 @@ for i, v in enumerate(integration_order):
                         
                         log_memory("after submitted checking order jobs")
 
+                        # # checking BrokenProcessPool error
+                        total_finished_checkings = 0
+
                         # Process results as they complete
                         for future in concurrent.futures.as_completed(term_futures):
                             order, term = future.result()
                             # term = future_to_term[future]
+                            # if n == 6 and len(remaining_vars) == 0:
+                            #     total_finished_checkings +=1
+                            #     log_memory(f"when collecting order checking results {total_finished_checkings}/{len(f_current.args)}")
                             if order == 1:
                                 first_order_terms.append(term)
-                            else:
+                            elif order > 1:
                                 higher_order_terms.append(term)
                         
                         log_memory("after finished checking order jobs")
@@ -688,13 +702,27 @@ for i, v in enumerate(integration_order):
                     higher_order_end = time.time()
                     print(f"Processed {len(higher_order_terms)} higher-order terms in {higher_order_end - higher_order_start:.2f}s")
                     
+                    # # save the variables to debug
+                    # if n == 6 and len(remaining_vars) == 0:
+                    #     print(f"Saving residue data for n=6 with {len(first_order_residues)} first-order terms and {len(higher_order_residues)} higher-order terms")
+                    #     try:
+                    #         import pickle
+                    #         with open(f"debug_first_order_residues_n{n}_var{v}.pkl", 'wb') as f:
+                    #             pickle.dump(first_order_residues, f)
+                    #         with open(f"debug_higher_order_residues_n{n}_var{v}.pkl", 'wb') as f:
+                    #             pickle.dump(higher_order_residues, f)
+                    #         print(f"Successfully saved residue data for debugging")
+                    #     except Exception as e:
+                    #         print(f"Error saving debug data: {e}")
+
+
                     # Combine results
                     combine_start = time.time()
                     combined_residues = sum(first_order_residues + higher_order_residues)
                     residues.append(combined_residues)
                     combine_end = time.time()
                     print(f"sum() takes {combine_end - combine_start:.1f}s")
-                    print(f"(completed in {combine_end - separate_first_order_start:.1f}s) Combined residue for candidate pole {cp} is: {combined_residues}")
+                    print(f"(completed in {combine_end - separate_first_order_start:.1f}s) Combined residue for candidate pole {cp} ")
                     
                 else:
                     # For poles with only first-order terms, use the original approach
@@ -737,7 +765,7 @@ for i, v in enumerate(integration_order):
                         
                         total_time = time.time() - start_time
                         res_sum_cp = sum(res_values)
-                        print(f"(completed in {total_time:.1f}s) Residue for candidate pole {cp} is: {res_sum_cp} ")
+                        print(f"(completed in {total_time:.1f}s) Residue for candidate pole {cp} ")
                         residues.append(res_sum_cp)
         else:
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -751,8 +779,10 @@ for i, v in enumerate(integration_order):
                     residues.append(res_val)
     else:
         print(f"No poles found inside the unit circle for variable {v}.")
-    
+    combine_start = time.time()
     residue_sum = sum(residues)
+    combine_end = time.time()
+    print(f"sum() over all residues takes {combine_end - combine_start:.1f}s")
     iter_end = time.time()
     print(f"Time taken for integration over variable {v}: {iter_end - iter_start} seconds\n")
     
